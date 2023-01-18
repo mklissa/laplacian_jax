@@ -100,6 +100,7 @@ class Maze2DBase(env_base.Task):
             index=pos_idx)
 
     def normalize_pos(self, pos):
+        # import pdb;pdb.set_trace()
         maze_shape = self._maze.maze_array.shape
         x = pos[0] / maze_shape[0] - 0.5
         y = pos[1] / maze_shape[1] - 0.5

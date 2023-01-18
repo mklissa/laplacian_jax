@@ -115,6 +115,8 @@ class EpisodicReplayBuffer:
         return s1, s2
 
     def sample_pairs(self, batch_size, discount=0.0):
+        # import pdb;pdb.set_trace()
+        discount=0.0
         episode_indices = self._sample_episodes(batch_size)
         step_ranges = self._gather_episode_lengths(episode_indices)
         step1_indices = uniform_sampling(step_ranges - 1)

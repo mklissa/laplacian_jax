@@ -2,9 +2,14 @@
 import os
 import argparse
 import importlib
+import pickle
+
 
 import numpy as np
 import torch
+import jax
+import haiku as hk
+from haiku import nets
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -25,9 +30,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--log_base_dir', type=str, 
         default=os.path.join(os.getcwd(), 'log'))
 parser.add_argument('--log_sub_dir', type=str, 
-        default='laprepr/OneRoom/torch_test')
+        default='laprepr/OneRoom/jax_test')
 parser.add_argument('--output_sub_dir', type=str, 
-        default='visualize_reprs/torch_test')
+        default='visualize_reprs/jax_test')
 # parser.add_argument('--output_sub_dir', type=str, 
 #         default='visualize_reprs/eigenvectors')
 parser.add_argument('--config_dir', type=str, default='rl_lap.configs')
@@ -37,6 +42,12 @@ parser.add_argument('--config_file',
 
 FLAGS = parser.parse_args()
 
+def _build_model_haiku(output_size):
+    def lap_net(obs):
+        network = hk.Sequential(
+            [nets.MLP([256, 256, 256, output_size])])
+        return network(obs.astype(np.float32))
+    return hk.without_apply_rng(hk.transform(lap_net))
 
 def get_config_cls():
     config_module = importlib.import_module(
@@ -51,7 +62,6 @@ def main():
     output_dir = os.path.join(FLAGS.log_base_dir, FLAGS.output_sub_dir)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-
     # load config
     flags = flag_tools.load_flags(log_dir)
     cfg_cls = get_config_cls()
@@ -60,10 +70,10 @@ def main():
     device = learner_args.device
 
     # load model from checkpoint
-    model = learner_args.model_cfg.model_factory()
-    model.to(device=device)
-    ckpt_path = os.path.join(log_dir, 'model.ckpt')
-    model.load_state_dict(torch.load(ckpt_path))
+    filepath = log_dir + '/model.pkl'
+    with open(filepath, 'rb') as file:
+        params = pickle.load(file)
+    model = _build_model_haiku(cfg.flags.d)
 
     # -- use loaded model to get state representations --
     # get the full batch of states from env
@@ -80,21 +90,24 @@ def main():
     goal_state = obs_prepro(goal_obs)[None]
 
     # get representations from loaded model
-    states_torch = torch_tools.to_tensor(states_batch, device)
-    goal_torch = torch_tools.to_tensor(goal_state, device)
-    states_reprs = model(states_torch).detach().cpu().numpy()
-    goal_repr = model(goal_torch).detach().cpu().numpy()
+    # states_torch = torch_tools.to_tensor(states_batch, device)
+    # goal_torch = torch_tools.to_tensor(goal_state, device)
+    # states_reprs = model(states_torch).detach().cpu().numpy()
+    # goal_repr = model(goal_torch).detach().cpu().numpy()
+    # states_reprs = model(states_torch).detach().cpu().numpy()
+    # import pdb;pdb.set_trace()
+    states_reprs = model.apply(params, states_batch)
 
     # compute l2 distances from states to goal
-    l2_dists = np.sqrt(np.sum(np.square(states_reprs - goal_repr), axis=-1))
+    # l2_dists = np.sqrt(np.sum(np.square(states_reprs - goal_repr), axis=-1))
 
     # -- visialize state representations --
     # plot raw distances with the walls
     image_shape = goal_obs.agent.image.shape
     map_ = np.zeros(image_shape[:2], dtype=np.float32)
     eigen=0
-    for eigen in range(20):
-        map_[pos_batch[:, 0], pos_batch[:, 1]] = states_reprs[:,eigen]
+    for eigen in range(cfg.flags.d):
+        map_[pos_batch[:, 0], pos_batch[:, 1]] = states_reprs[:, eigen]
         # map_[pos_batch[:, 0], pos_batch[:, 1]] = eigenvectors[eigen,:]
         im_ = plt.imshow(map_, interpolation='none', cmap='Blues')
         plt.colorbar()

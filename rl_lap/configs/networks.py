@@ -22,7 +22,6 @@ class MLP(nn.Module):
             h = F.relu(layer(h))
         return h
 
-
 class ReprNetMLP(nn.Module):
 
     def __init__(self, input_shape, n_layers, n_units, d):

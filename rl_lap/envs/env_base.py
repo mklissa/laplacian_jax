@@ -96,6 +96,7 @@ class Environment:
     def step(self, action):
         if self._should_restart:
             return self.reset()
+        # import pdb;pdb.set_trace()
         self._task.step(action)
         obs = self._task.get_observation()
         reward = self._task.get_reward()

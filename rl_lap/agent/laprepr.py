@@ -14,6 +14,37 @@ from ..tools import flag_tools
 from ..tools import summary_tools
 from ..tools import timer_tools
 
+def generalized_graph_drawing_loss(pos_rep_i, pos_rep_j, neg_rep, neg_rep_2, reward, delta, beta, ggd=True):
+
+    # Retreive the dimensions
+    bz, n_dim = neg_rep.shape[:2]
+    # all_reward = reward[:, None] + 1.
+    # import pdb;pdb.set_trace()
+    pos_loss, neg_loss = 0, 0
+    for dim in range(n_dim, 0, -1):
+        # Loss for positive pairs
+        # pos_loss += ( all_reward + 0.99 * pos_rep_j[:, :dim] - pos_rep_i[:, :dim] ).pow(2).sum(dim=-1).mean()
+        pos_loss += (pos_rep_i[:, :dim] - pos_rep_j[:, :dim]).pow(2).sum(dim=-1).mean()
+
+        # all_dot_products = torch.matmul(neg_rep[:, :dim], neg_rep_2[:, :dim].T)
+        # loss = torch.square(all_dot_products.diagonal()) / n_dim - neg_rep[:, :dim].pow(2).sum(dim=-1) / n_dim - neg_rep_2[:, :dim].pow(2).sum(dim=-1) / n_dim + 1./ n_dim
+        # neg_loss += loss.mean()
+        # # Loss for negative pairs
+        inprods = neg_rep[:, :dim] @ neg_rep[:, :dim].T
+        norms = torch.diagonal(inprods, 0)
+        part1 = (inprods.pow(2).sum() - norms.pow(2).sum()) / (bz * (bz - 1))
+        part2 = -2 * delta * norms.mean() / n_dim
+        part3 = delta * delta / n_dim
+        neg_loss += part1 + part2 + part3
+
+        # Break the loop if not using generalized graph drawing objective
+        if not ggd:
+            break
+
+    # Total loss
+    loss = pos_loss  + beta * neg_loss 
+    return loss, pos_loss, neg_loss
+
 
 def l2_dist(x1, x2):
     return (x1 - x2).pow(2).sum(-1)
@@ -35,6 +66,8 @@ def neg_loss(x, c=1.0, reg=0.0):
         = reg * E[(x^T x)^2 - 2c x^T x + c^2] / n
     for reg in [0, 1]
     """
+
+    # import pdb;pdb.set_trace()
     n = x.shape[0]
     d = x.shape[1]
     inprods = x @ x.T
@@ -108,12 +141,16 @@ class LapReprLearner:
         s1 = batch.s1
         s2 = batch.s2
         s_neg = batch.s_neg
+        s_neg_2 = batch.s_neg_2
         s1_repr = self._repr_fn(s1)
         s2_repr = self._repr_fn(s2)
         s_neg_repr = self._repr_fn(s_neg)
-        loss_positive = pos_loss(s1_repr, s2_repr)
-        loss_negative = neg_loss(s_neg_repr, c=self._c_neg, reg=self._reg_neg)
-        loss = loss_positive + self._w_neg * loss_negative
+        s_neg_2_repr = self._repr_fn(s_neg_2)
+
+        loss, loss_positive, loss_negative = generalized_graph_drawing_loss(s1_repr, s2_repr,
+                                            s_neg_repr, s_neg_2_repr, batch.reward,
+                                            delta=1.0, beta=self._w_neg, ggd=True)
+
         info = self._train_info
         info['loss_pos'] = loss_positive.item()
         info['loss_neg'] = loss_negative.item()
@@ -128,6 +165,18 @@ class LapReprLearner:
                 for s in steps]
         return np.stack(obs_batch, axis=0)
 
+
+    def _get_obs_batch(self, steps):
+        obs_batch = [self._obs_prepro(s.step.time_step.observation)
+                for s in steps]
+        return np.stack(obs_batch, axis=0)
+
+
+    def _get_rew_batch(self, steps):
+        rew_batch = [s.step.time_step.reward
+                for s in steps]
+        return np.stack(rew_batch, axis=0)
+
     def _tensor(self, x):
         return torch_tools.to_tensor(x, self._device)
 
@@ -137,11 +186,15 @@ class LapReprLearner:
                 discount=self._discount,
                 )
         s_neg = self._replay_buffer.sample_steps(self._batch_size)
-        s1, s2, s_neg = map(self._get_obs_batch, [s1, s2, s_neg])
+        s_neg_2 = self._replay_buffer.sample_steps(self._batch_size)
+        s1_pos, s2_pos, s_neg, s_neg_2 = map(self._get_obs_batch, [s1, s2, s_neg, s_neg_2])
         batch = flag_tools.Flags()
-        batch.s1 = self._tensor(s1)
-        batch.s2 = self._tensor(s2)
+        reward_s1, reward_s2 = map(self._get_rew_batch,[s1, s2])
+        batch.s1 = self._tensor(s1_pos)
+        batch.s2 = self._tensor(s2_pos)
+        batch.reward = self._tensor(reward_s2)
         batch.s_neg = self._tensor(s_neg)
+        batch.s_neg_2 = self._tensor(s_neg_2)
         return batch
 
     def _train_step(self):
@@ -161,6 +214,7 @@ class LapReprLearner:
         saver_dir = self._log_dir
         if not os.path.exists(saver_dir):
             os.makedirs(saver_dir)
+
         actor = actors.StepActor(self._env_factory)
         # start actors, collect trajectories from random actions
         logging.info('Start collecting samples.')
@@ -179,6 +233,7 @@ class LapReprLearner:
         time_cost = timer.time_cost()
         logging.info('Data collection finished, time cost: {}s'
             .format(time_cost))
+
         # learning begins
         timer.set_step(0)
         for step in range(self._total_train_steps):
@@ -221,7 +276,7 @@ class LapReprConfig(flag_tools.ConfigBase):
         flags.replay_buffer_size = 100000
         flags.opt_args = flag_tools.Flags(name='Adam', lr=0.001)
         # train
-        flags.log_dir = '/tmp/rl_laprepr/log'
+        flags.log_dir = './log/generalized'
         flags.total_train_steps = 50000
         flags.print_freq = 1000
         flags.save_freq = 10000

@@ -20,7 +20,7 @@ class Config(laprepr.LapReprConfig):
         flags.opt_args.lr = 0.001
         # train
         flags.log_dir = '/tmp/rl_laprepr/log'
-        flags.total_train_steps = 30000
+        flags.total_train_steps = 5000
         flags.print_freq = 1000
         flags.save_freq = 10000
 

@@ -15,7 +15,7 @@ class Maze2DSingleGoal(maze2d_base.Maze2DBase):
             episode_len=50, 
             start_pos='first', 
             use_stay_action=True,
-            reward_type='neg',
+            reward_type='pos',
             goal_pos=None,
             end_at_goal=False):
         super().__init__(

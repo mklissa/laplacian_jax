@@ -1,8 +1,12 @@
 import os
 import argparse
 import importlib
+import random
+import numpy as np
+
 
 from rl_lap.agent import laprepr
+from rl_lap.agent import laprepr_jax
 
 from rl_lap.tools import flag_tools
 from rl_lap.tools import timer_tools
@@ -31,23 +35,32 @@ def get_config_cls():
 
 
 def main():
+    np.random.seed(42)
+    random.seed(42)
     timer = timer_tools.Timer()
     if FLAGS.log_sub_dir == 'auto_d':
         FLAGS.log_sub_dir = logging_tools.get_datetime()
+
     # pass args to config
     cfg_cls = get_config_cls()
     flags = flag_tools.Flags()
+
+    # log dir
     flags.log_dir = os.path.join(
             FLAGS.log_base_dir,
             FLAGS.exp_name,
             FLAGS.env_id,
             FLAGS.log_sub_dir)
+
     flags.env_id = FLAGS.env_id
     flags.args = FLAGS.args
     logging_tools.config_logging(flags.log_dir)
     cfg = cfg_cls(flags)
     flag_tools.save_flags(cfg.flags, flags.log_dir)
-    learner = laprepr.LapReprLearner(**cfg.args)
+
+    # learner = laprepr.LapReprLearner(**cfg.args)
+    learner = laprepr_jax.LapReprLearner(cfg.flags.d, **cfg.args)
+
     learner.train()
     print('Total time cost: {:.4g}s.'.format(timer.time_cost()))
 
