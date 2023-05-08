@@ -18,6 +18,9 @@ class StepActor:
             action, context = policy_fn(state)
             step = Step(self._time_step, action, self._context)
             steps.append(step)
+            if self._time_step.is_last:
+                self._time_step = self._env.reset()
             self._time_step = self._env.step(action)
+            # import pdb;pdb.set_trace()
             self._context = context
         return steps

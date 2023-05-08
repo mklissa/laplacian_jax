@@ -10,6 +10,7 @@ import torch
 import jax
 import haiku as hk
 from haiku import nets
+import jax.numpy as jnp
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -24,30 +25,22 @@ pylab.rcParams.update(params)
 from rl_lap.agent import laprepr
 from rl_lap.tools import flag_tools
 from rl_lap.tools import torch_tools
+from rl_lap.agent import laprepr_jax
 
 
+env_id='HardMaze'
 parser = argparse.ArgumentParser()
 parser.add_argument('--log_base_dir', type=str, 
         default=os.path.join(os.getcwd(), 'log'))
 parser.add_argument('--log_sub_dir', type=str, 
-        default='laprepr/OneRoom/jax_test')
+        default=f'laprepr/{env_id}/jax_test')
 parser.add_argument('--output_sub_dir', type=str, 
-        default='visualize_reprs/jax_test')
-# parser.add_argument('--output_sub_dir', type=str, 
-#         default='visualize_reprs/eigenvectors')
+        default=f'visualize_reprs/{env_id}/jax_test')
 parser.add_argument('--config_dir', type=str, default='rl_lap.configs')
-parser.add_argument('--config_file', 
-        type=str, default='laprepr_config_gridworld')
-
+parser.add_argument('--config_file', type=str, default='laprepr_config_gridworld')
+parser.add_argument('--iteration', type=int, default=30_000)
 
 FLAGS = parser.parse_args()
-
-def _build_model_haiku(output_size):
-    def lap_net(obs):
-        network = hk.Sequential(
-            [nets.MLP([256, 256, 256, output_size])])
-        return network(obs.astype(np.float32))
-    return hk.without_apply_rng(hk.transform(lap_net))
 
 def get_config_cls():
     config_module = importlib.import_module(
@@ -70,10 +63,10 @@ def main():
     device = learner_args.device
 
     # load model from checkpoint
-    filepath = log_dir + '/model.pkl'
+    filepath = log_dir + f'/model-{FLAGS.iteration}.pkl'
     with open(filepath, 'rb') as file:
         params = pickle.load(file)
-    model = _build_model_haiku(cfg.flags.d)
+    model = laprepr_jax._build_model_haiku(cfg.flags.d)
 
     # -- use loaded model to get state representations --
     # get the full batch of states from env
@@ -93,20 +86,40 @@ def main():
     # states_torch = torch_tools.to_tensor(states_batch, device)
     # goal_torch = torch_tools.to_tensor(goal_state, device)
     # states_reprs = model(states_torch).detach().cpu().numpy()
-    # goal_repr = model(goal_torch).detach().cpu().numpy()
+    goal_repr = model.apply(params, goal_state)
     # states_reprs = model(states_torch).detach().cpu().numpy()
     # import pdb;pdb.set_trace()
     states_reprs = model.apply(params, states_batch)
 
     # compute l2 distances from states to goal
-    # l2_dists = np.sqrt(np.sum(np.square(states_reprs - goal_repr), axis=-1))
+    l2_dists = np.sqrt(np.sum(np.square(states_reprs - goal_repr), axis=-1))
+    image_shape = goal_obs.agent.image.shape
+    map_ = np.zeros(image_shape[:2], dtype=np.float32)
+    map_[pos_batch[:, 0], pos_batch[:, 1]] = l2_dists
+    im_ = plt.imshow(map_, interpolation='none', cmap='Blues')
+    plt.colorbar()
+
+    # add the walls to the normalized distance plot
+    walls = np.expand_dims(env.task.maze.render(), axis=-1)
+    map_2 = im_.cmap(im_.norm(map_))
+    map_2[:, :, :-1] = map_2[:, :, :-1] * (1 - walls) + 0.5 * walls
+    map_2[:, :, -1:] = map_2[:, :, -1:] * (1 - walls) + 1.0 * walls
+    map_2[goal_pos[0], goal_pos[1]] = [1, 0, 0, 1]
+    plt.cla()
+    plt.imshow(map_2, interpolation='none')
+    plt.xticks([])
+    plt.yticks([])
+    plt.title(flags.env_id)
+    figfile = os.path.join(output_dir, f'{flags.env_id}_l2dist_goal.png')
+    plt.savefig(figfile, bbox_inches='tight')
+    plt.clf()
 
     # -- visialize state representations --
     # plot raw distances with the walls
     image_shape = goal_obs.agent.image.shape
     map_ = np.zeros(image_shape[:2], dtype=np.float32)
     eigen=0
-    for eigen in range(cfg.flags.d):
+    for eigen in range(min(50, cfg.flags.d)):
         map_[pos_batch[:, 0], pos_batch[:, 1]] = states_reprs[:, eigen]
         # map_[pos_batch[:, 0], pos_batch[:, 1]] = eigenvectors[eigen,:]
         im_ = plt.imshow(map_, interpolation='none', cmap='Blues')

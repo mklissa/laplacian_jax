@@ -94,6 +94,8 @@ class Maze2DBase(env_base.Task):
             [self._maze.height, self._maze.width, 3])
         colored_maze[tuple(pos)] = np.array(AGENT_COLOR)
         pos_idx = one_hot(self._maze.pos_index(pos), self._maze.n_states)
+        # colored_maze = None
+        # pos_idx = None
         return ObservationType(
             image=colored_maze,
             position=self.normalize_pos(pos),

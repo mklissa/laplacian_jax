@@ -50,7 +50,7 @@ class EpisodicReplayBuffer:
         self._next_idx = 0
         self._episode_buffer = []
         self._r = 0.0
-        self._episodes = []
+        self._episodes = self.episodes = []
 
     @property
     def current_size(self):
@@ -60,13 +60,16 @@ class EpisodicReplayBuffer:
     def max_size(self):
         return self._max_size
 
+    def get_episodes(self,):
+        return self.episodes
+
     def add_steps(self, steps):
         """
         steps: a list of Step(time_step, action, context).
         """
         for step in steps:
             self._episode_buffer.append(step)
-            self._r += step.time_step.reward
+            # self._r += step.time_step.reward
             # Push each step into the episode buffer until an end-of-episode
             # step is found. 
             # self._r is used to track the cumulative return in each episode.
@@ -115,8 +118,6 @@ class EpisodicReplayBuffer:
         return s1, s2
 
     def sample_pairs(self, batch_size, discount=0.0):
-        # import pdb;pdb.set_trace()
-        discount=0.0
         episode_indices = self._sample_episodes(batch_size)
         step_ranges = self._gather_episode_lengths(episode_indices)
         step1_indices = uniform_sampling(step_ranges - 1)

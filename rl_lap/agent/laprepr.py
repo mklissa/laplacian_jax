@@ -2,6 +2,7 @@ import os
 import logging
 import collections
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from torch import optim
@@ -13,13 +14,13 @@ from ..tools import torch_tools
 from ..tools import flag_tools
 from ..tools import summary_tools
 from ..tools import timer_tools
+from . import gt_laplacian
 
 def generalized_graph_drawing_loss(pos_rep_i, pos_rep_j, neg_rep, neg_rep_2, reward, delta, beta, ggd=True):
 
     # Retreive the dimensions
     bz, n_dim = neg_rep.shape[:2]
-    # all_reward = reward[:, None] + 1.
-    # import pdb;pdb.set_trace()
+
     pos_loss, neg_loss = 0, 0
     for dim in range(n_dim, 0, -1):
         # Loss for positive pairs
@@ -66,7 +67,6 @@ def neg_loss(x, c=1.0, reg=0.0):
         = reg * E[(x^T x)^2 - 2c x^T x + c^2] / n
     for reg in [0, 1]
     """
-
     # import pdb;pdb.set_trace()
     n = x.shape[0]
     d = x.shape[1]
@@ -91,6 +91,7 @@ class LapReprLearner:
 
     @py_tools.store_args
     def __init__(self,
+            max_distance,
             # pytorch
             device=None,
             # env args
@@ -113,6 +114,7 @@ class LapReprLearner:
             total_train_steps=50000,
             print_freq=1000,
             save_freq=10000,
+            d=20,
             ):
         self._build()
 
@@ -158,19 +160,13 @@ class LapReprLearner:
         return loss
     
     def _random_policy_fn(self, state):
-        return self._action_spec.sample(), None
+        action = self._action_spec.sample()
+        return action, None
 
     def _get_obs_batch(self, steps):
         obs_batch = [self._obs_prepro(s.step.time_step.observation)
                 for s in steps]
         return np.stack(obs_batch, axis=0)
-
-
-    def _get_obs_batch(self, steps):
-        obs_batch = [self._obs_prepro(s.step.time_step.observation)
-                for s in steps]
-        return np.stack(obs_batch, axis=0)
-
 
     def _get_rew_batch(self, steps):
         rew_batch = [s.step.time_step.reward
@@ -210,10 +206,61 @@ class LapReprLearner:
                 step=self._global_step, info=self._train_info)
         logging.info(summary_str)
 
+    def calculate_simgt(self):
+        with torch.no_grad():
+            laprep = self._repr_fn(self.states_torch)
+            laprep_normalized = laprep / torch.norm(laprep, dim=0)
+        # for i in range(3):
+        #     plt.imshow(torch.real(laprep[:, i]).reshape(
+        # env.task.maze._height-2, env.task.maze._width-2))
+        #     plt.colorbar()
+        #     plt.show()
+        #     plt.close()
+
+        all_sim_gt = laprep_normalized.T @ torch.real(self.d_small_eigvecs)
+        # sim_gt = torch.abs(torch.diagonal(all_sim_gt)).mean()
+        sim_gt = torch.mean(torch.max(torch.abs(all_sim_gt), dim=1)[0])
+        sim_gt = np.array([sim_gt])[0]
+
+        # all_sim_gt = all_sim_gt.detach().cpu().numpy()
+        # sim_gt = []
+        # for i in range(len(all_sim_gt)):
+        #     x = max(i-2, 0)
+        #     y = min(i+3, len(all_sim_gt))
+        #     cur_sim = np.max(np.abs(all_sim_gt)[i, x:y])
+        #     sim_gt.append(cur_sim)
+        # sim_gt = np.array([sim_gt])[0]
+        # sim_gt = np.array(sim_gt).mean()
+
+        self._train_info['sim_gt'] = sim_gt 
+        return sim_gt
+
     def train(self):
         saver_dir = self._log_dir
         if not os.path.exists(saver_dir):
             os.makedirs(saver_dir)
+
+        # Calculate Ground-Truth Eigenvectors
+        env = self._env_factory()
+        if hasattr(env, 'admissible_stickers'):
+            eigenvectors = np.load(f'./rl_lap/data/eigenvectors_distance{self._max_distance}.npy')
+            self.d_small_eigvecs = eigenvectors[:, :self._d]
+            self.d_small_eigvecs = torch_tools.to_tensor(self.d_small_eigvecs, self._device)
+            states_batch = env.admissible_stickers
+            self.states_torch = torch_tools.to_tensor(states_batch, self._device)
+        else:
+            states, r_states = gt_laplacian.get_all_states(env)
+            eigenvectors, eigenvalues, P = gt_laplacian.get_exact_laplacian(states, r_states)
+            self.d_small_eigvecs = d_small_eigvecs = eigenvectors[:, :self._d]
+
+            n_states = env.task.maze.n_states
+            pos_batch = env.task.maze.all_empty_grids()
+            obs_batch = [env.task.pos_to_obs(pos) for pos in pos_batch]
+            def obs_prepro(obs):
+                return obs.agent.position
+            obs_batch = [env.task.pos_to_obs(pos_batch[i]) for i in range(n_states)]
+            states_batch = np.array([obs_prepro(obs) for obs in obs_batch])
+            self.states_torch = torch_tools.to_tensor(states_batch, self._device)
 
         actor = actors.StepActor(self._env_factory)
         # start actors, collect trajectories from random actions
@@ -246,6 +293,7 @@ class LapReprLearner:
                 self.save_ckpt(saver_path)
             # print info
             if step == 0 or (step + 1) % self._print_freq == 0:
+                self.calculate_simgt()
                 steps_per_sec = timer.steps_per_sec(step)
                 logging.info('Training steps per second: {:.4g}.'
                         .format(steps_per_sec))
@@ -254,6 +302,8 @@ class LapReprLearner:
         self.save_ckpt(saver_path)
         time_cost = timer.time_cost()
         logging.info('Training finished, time cost {:.4g}s.'.format(time_cost))
+        sim_gt = self.calculate_simgt()
+        logging.info(f'Final SimGT: {sim_gt:.4f}')
 
     def save_ckpt(self, filepath):
         torch.save(self._repr_fn.state_dict(), filepath)

@@ -18,7 +18,7 @@ class OneRoomEnv(env_base.Environment):
                 maze=ONE_ROOM_MAZE,
                 episode_len=50,
                 start_pos='random',
-                use_stay_action=True,
+                use_stay_action=False,
                 reward_type='neg',
                 goal_pos=ONE_ROOM_GOAL_POS,
                 end_at_goal=False)
@@ -31,7 +31,7 @@ class TwoRoomEnv(env_base.Environment):
                 maze=TWO_ROOM_MAZE,
                 episode_len=50,
                 start_pos='random',
-                use_stay_action=True,
+                use_stay_action=False,
                 reward_type='neg',
                 goal_pos=TWO_ROOM_GOAL_POS,
                 end_at_goal=False)
@@ -44,9 +44,9 @@ class HardMazeEnv(env_base.Environment):
                 maze=HARD_MAZE,
                 episode_len=50,
                 start_pos='random',
-                use_stay_action=True,
+                use_stay_action=False,
                 reward_type='neg',
-                goal_pos=HARD_MAZE_GOAL_POS,
+                # goal_pos=HARD_MAZE_GOAL_POS,
                 end_at_goal=False)
         super().__init__(task)
 

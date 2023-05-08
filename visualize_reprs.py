@@ -19,15 +19,16 @@ pylab.rcParams.update(params)
 from rl_lap.agent import laprepr
 from rl_lap.tools import flag_tools
 from rl_lap.tools import torch_tools
+from rl_lap.agent import gt_laplacian
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--log_base_dir', type=str, 
         default=os.path.join(os.getcwd(), 'log'))
 parser.add_argument('--log_sub_dir', type=str, 
-        default='laprepr/OneRoom/torch_test')
+        default='laprepr/OneRoom/torch')
 parser.add_argument('--output_sub_dir', type=str, 
-        default='visualize_reprs/torch_test')
+        default='visualize_reprs/torch')
 # parser.add_argument('--output_sub_dir', type=str, 
 #         default='visualize_reprs/eigenvectors')
 parser.add_argument('--config_dir', type=str, default='rl_lap.configs')
@@ -82,8 +83,19 @@ def main():
     # get representations from loaded model
     states_torch = torch_tools.to_tensor(states_batch, device)
     goal_torch = torch_tools.to_tensor(goal_state, device)
-    states_reprs = model(states_torch).detach().cpu().numpy()
+    lap_rep = model(states_torch)
+    states_reprs = lap_rep.detach().cpu().numpy()
     goal_repr = model(goal_torch).detach().cpu().numpy()
+
+    states, r_states = gt_laplacian.get_all_states(env)
+    eigenvectors, eigenvalues, P = gt_laplacian.get_exact_laplacian(states, r_states)
+    d_small_eigvecs = eigenvectors[:, :5]
+
+    # lap_rep_norm = lap_rep / torch.norm(lap_rep, dim=0)
+    # all_sim_gt = lap_rep_norm[:, :].T @ torch.real(d_small_eigvecs[:, :])
+    # sim_gt = torch.abs(torch.diagonal(all_sim_gt)).mean()
+    # # sim_gt = torch.mean(torch.max(torch.abs(all_sim_gt), dim=1)[0])
+    # print("SimtGT: ", sim_gt)
 
     # compute l2 distances from states to goal
     l2_dists = np.sqrt(np.sum(np.square(states_reprs - goal_repr), axis=-1))
@@ -93,9 +105,9 @@ def main():
     image_shape = goal_obs.agent.image.shape
     map_ = np.zeros(image_shape[:2], dtype=np.float32)
     eigen=0
-    for eigen in range(20):
-        map_[pos_batch[:, 0], pos_batch[:, 1]] = states_reprs[:,eigen]
-        # map_[pos_batch[:, 0], pos_batch[:, 1]] = eigenvectors[eigen,:]
+    for eigen in range(5):
+        map_[pos_batch[:, 0], pos_batch[:, 1]] = states_reprs[:, eigen]
+        # map_[pos_batch[:, 0], pos_batch[:, 1]] = eigenvectors[:,eigen]
         im_ = plt.imshow(map_, interpolation='none', cmap='Blues')
         plt.colorbar()
 

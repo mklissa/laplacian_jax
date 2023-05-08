@@ -177,5 +177,3 @@ class Maze:
     def render(self):
         # 0 for ground, 1 for wall
         return (self._maze!=' ').astype(np.float32)
-
-

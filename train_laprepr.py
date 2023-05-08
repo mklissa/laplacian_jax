@@ -16,8 +16,8 @@ from rl_lap.tools import logging_tools
 parser = argparse.ArgumentParser()
 parser.add_argument('--log_base_dir', type=str, 
         default=os.path.join(os.getcwd(), 'log'))
-parser.add_argument('--log_sub_dir', type=str, default='test')
-parser.add_argument('--env_id', type=str, default='OneRoom')
+parser.add_argument('--log_sub_dir', type=str, default='jax_test')
+parser.add_argument('--env_id', type=str, default='HardMaze')
 parser.add_argument('--config_dir', type=str, default='rl_lap.configs')
 parser.add_argument('--config_file', 
         type=str, default='laprepr_config_gridworld')
@@ -58,8 +58,8 @@ def main():
     cfg = cfg_cls(flags)
     flag_tools.save_flags(cfg.flags, flags.log_dir)
 
-    # learner = laprepr.LapReprLearner(**cfg.args)
-    learner = laprepr_jax.LapReprLearner(cfg.flags.d, **cfg.args)
+    # learner = laprepr.LapReprLearner(cfg.flags.max_distance, **cfg.args)
+    learner = laprepr_jax.LapReprLearner(cfg.flags.d, cfg.flags.max_distance, **cfg.args)
 
     learner.train()
     print('Total time cost: {:.4g}s.'.format(timer.time_cost()))

@@ -1,5 +1,4 @@
 import os
-import random
 import logging
 import collections
 
@@ -23,11 +22,11 @@ from ..tools import summary_tools
 from ..tools import timer_tools
 from . import gt_laplacian
 
-Data = collections.namedtuple("Data", "s1 s2 s_neg_x s_neg_y")
+Data = collections.namedtuple("Data", "s1 s2 reward s_neg_x s_neg_y s_neg_z")
 
 
 rate = 2.
-dimensionality = 10
+dimensionality = 20
 coeff_vector = jnp.arange(dimensionality, 0, -1)
 # coeff_vector = 1. / jnp.arange(1, dimensionality + 1)
 # coeff_vector = 1. / rate ** jnp.arange(dimensionality)
@@ -35,9 +34,16 @@ coeff_vector = jnp.arange(dimensionality, 0, -1)
 # coeff_vector = coeff_vector.at[0].set(3)
 coeff_vector = jnp.concatenate((coeff_vector, jnp.zeros(1)))
 print(coeff_vector[:-1])
+coeff = 0.3
 
+def kernel_loss(pos_rep_i, pos_rep_j):
+    cov = jnp.outer(pos_rep_i, pos_rep_j)
+    diag = jnp.diagonal(cov)
+    sg_cov = jnp.outer(jax.lax.stop_gradient(pos_rep_i), pos_rep_j)**2
+    non_diag = (sg_cov - jnp.diagonal(sg_cov)) / 2
+    return diag.sum() - coeff * non_diag.sum()
 
-def neg_loss_fn(neg_rep_x, neg_rep_y):
+def neg_loss_fn(neg_rep_x, neg_rep_y, neg_rep_z):
     loss = 0
     n_dim = neg_rep_x.shape[0]
     for dim in range(n_dim, 0, -1):
@@ -48,65 +54,59 @@ def neg_loss_fn(neg_rep_x, neg_rep_y):
 
         delta = 1.0
         dot_product = jnp.dot(neg_rep_x[:dim], neg_rep_y[:dim])
-        # absolute = jnp.abs(dot_product)
-        # quadratic = jnp.minimum(absolute, delta)
-        # linear = absolute - quadratic
-        # orthogonality_loss = 0.5 * quadratic ** 2 + delta * linear
+        absolute = jnp.abs(dot_product)
+        quadratic = jnp.minimum(absolute, delta)
+        linear = absolute - quadratic
+        orthogonality_loss = 0.5 * quadratic ** 2 + delta * linear
 
-        # loss += coeff * ( 0.5 * dot_product ** 2 - x_norm ** 2 / n_dim  - y_norm ** 2 / n_dim  )
-        loss += coeff * ( 0.5 * dot_product ** 2 - jnp.log(1 + x_norm)  - jnp.log(1 + y_norm)  )
+        loss += coeff * ( absolute - jnp.log(1 + x_norm / n_dim)  - jnp.log(1 + y_norm / n_dim)  )
             #- jnp.dot(neg_rep_z[:dim], neg_rep_z[:dim]) / n_dim )
-            
         # # max_norm = jnp.maximum(x_norm, y_norm)
-        # loss += coeff * ( jnp.dot(neg_rep_x[:dim], neg_rep_y[:dim])/ (x_norm * y_norm) ) ** 2#  - x_norm ** 2 / n_dim - y_norm ** 2 / n_dim )
+        # loss += coeff * ( jnp.dot(neg_rep_x[:dim], neg_rep_y[:dim]) ) ** 2#  - x_norm ** 2 / n_dim - y_norm ** 2 / n_dim )
     # loss = jnp.minimum(1, loss)
     # loss = jnp.maximum(-1, jnp.minimum(1, loss))
     return loss
-
-neg_loss_vmap = jax.vmap(neg_loss_fn)
+    # return jnp.exp(loss)
 
 def pos_loss_fn(pos_rep_i, pos_rep_j):
     norm_i = jnp.sqrt(jnp.dot(pos_rep_i, pos_rep_i))
     norm_j = jnp.sqrt(jnp.dot(pos_rep_j, pos_rep_j))
     return 1. - jnp.dot(pos_rep_i, pos_rep_j) / (norm_i * norm_j)
 
-def generalized_graph_drawing_loss_haiku(pos_rep_i, pos_rep_j, neg_rep_x, neg_rep_y, alpha=1.0, beta=2.0):
-    # import pdb;pdb.set_trace()
-
+def generalized_graph_drawing_loss_haiku(pos_rep_i, pos_rep_j, neg_rep_x, neg_rep_y, neg_rep_z, alpha=1.0, beta=2.0):
+    # kernel_vmap = jax.vmap(kernel_loss)
+    # loss = kernel_vmap(pos_rep_i, pos_rep_j).mean()
+    # pos_loss = 0.
+    # neg_loss = 0.
     pos_loss = ((pos_rep_i - pos_rep_j)**2).dot(coeff_vector[:dimensionality]).mean()
-    # pos_loss = jnp.minimum(1, pos_loss)
+    pos_loss = jnp.minimum(1, pos_loss)
     # pos_loss_vmap = jax.vmap(pos_loss_fn)
     # pos_loss  = pos_loss_vmap(pos_rep_i, pos_rep_j).mean()
 
+    neg_loss_vmap = jax.vmap(neg_loss_fn)
     # neg_loss  = jnp.log(neg_loss_vmap(neg_rep_x, neg_rep_y, neg_rep_z).sum())
     # neg_loss  = neg_loss_vmap(neg_rep_x, neg_rep_y, neg_rep_z).max()
-    neg_loss  = neg_loss_vmap(neg_rep_x, neg_rep_y).mean()
+    neg_loss  = neg_loss_vmap(neg_rep_x, neg_rep_y, neg_rep_z).mean()
     # neg_loss = jnp.maximum(-2, jnp.minimum(2, neg_loss))
 
     loss = alpha * pos_loss + beta * neg_loss
+
     return loss, pos_loss, neg_loss
 
 
-# def _build_model_haiku(d):
-#     def lap_net(obs):
-#         activation = jax.nn.relu
-#         network = hk.Sequential([
-#             # hk.Linear(256),
-#             # activation,
-#             hk.Linear(256),
-#             activation,
-#             hk.Linear(256),
-#             activation,
-#             hk.Linear(d),
-#             # jax.nn.elu,
-#             ])
-#         return network(obs.astype(np.float32))
-#     return hk.without_apply_rng(hk.transform(lap_net))
-
 def _build_model_haiku(d):
     def lap_net(obs):
-        network = hk.Sequential(
-            [nets.MLP([256, 256, 256, d])])
+        activation = jax.nn.relu
+        network = hk.Sequential([
+            hk.Linear(256),
+            activation,
+            hk.Linear(256),
+            activation,
+            hk.Linear(256),
+            activation,
+            hk.Linear(d),
+            # jax.nn.elu,
+            ])
         return network(obs.astype(np.float32))
     return hk.without_apply_rng(hk.transform(lap_net))
 
@@ -164,15 +164,23 @@ class LapReprLearner:
                 for s in steps]
         return np.stack(obs_batch, axis=0)
 
+    def _get_rew_batch(self, steps):
+        rew_batch = [s.step.time_step.reward
+                for s in steps]
+        return np.stack(rew_batch, axis=0)
+
     def _get_train_batch_jax(self,):
         s1, s2 = self._replay_buffer.sample_pairs(
+                # batch_size=self._batch_size,
                 batch_size=self._batch_size,
                 discount=self._discount,
                 )
         s_neg_x = self._replay_buffer.sample_steps(self._batch_size)
         s_neg_y = self._replay_buffer.sample_steps(self._batch_size)
-        s1_pos, s2_pos, s_neg_x, s_neg_y = map(self._get_obs_batch, [s1, s2, s_neg_x, s_neg_y])
-        batch = Data(s1_pos, s2_pos, s_neg_x, s_neg_y)
+        s_neg_z = self._replay_buffer.sample_steps(self._batch_size)
+        s1_pos, s2_pos, s_neg_x, s_neg_y, s_neg_z = map(self._get_obs_batch, [s1, s2, s_neg_x, s_neg_y, s_neg_z])
+        reward_s1, reward_s2 = map(self._get_rew_batch,[s1, s2])
+        batch = Data(s1_pos, s2_pos, reward_s2, s_neg_x, s_neg_y, s_neg_z)
         return batch
 
     def _loss(self, params, batch, alpha, beta):
@@ -180,11 +188,13 @@ class LapReprLearner:
         s2_repr = self._repr_fn.apply(params, batch.s2)
         s_neg_x_repr = self._repr_fn.apply(params, batch.s_neg_x)
         s_neg_y_repr = self._repr_fn.apply(params, batch.s_neg_y)
+        s_neg_z_repr = self._repr_fn.apply(params, batch.s_neg_z)
         loss, loss_positive, loss_negative = generalized_graph_drawing_loss_haiku(s1_repr, s2_repr,
-                                            s_neg_x_repr, s_neg_y_repr, alpha=alpha, beta=beta)
+                                            s_neg_x_repr, s_neg_y_repr, s_neg_z_repr, alpha=alpha, beta=beta)
         return loss, (loss, loss_positive, loss_negative)
 
     def train_step_jax(self, params, opt_state, batch, alpha, beta):
+        # import pdb;pdb.set_trace()
         _, aux = self._loss(params, batch, alpha, beta)
         dloss_dtheta, aux = jax.grad(self._loss, has_aux=True)(params, batch, alpha, beta)
         updates, opt_state = self._optimizer.update(dloss_dtheta, opt_state)
@@ -243,9 +253,6 @@ class LapReprLearner:
         logging.info('Start collecting samples.')
         timer = timer_tools.Timer()
 
-
-        np.random.seed(42)
-        random.seed(42)
         # collect initial transitions
         total_n_steps = 0
         collect_batch = 10_000
@@ -270,7 +277,7 @@ class LapReprLearner:
         # learning begins
         timer.set_step(0)
         final_alpha = 1.0
-        final_beta = 2.0
+        final_beta = 0.3
         period_alpha = self._total_train_steps / 2.
         period_beta = self._total_train_steps / 2.
         for step in range(self._total_train_steps):
@@ -283,7 +290,6 @@ class LapReprLearner:
 
             batch = self._get_train_batch_jax()
             params, opt_state, losses = self.train_step_jax(params, opt_state, batch, alpha=alpha, beta=beta)
-
             self._global_step += 1
             self._train_info['loss_total'] = np.array([jax.device_get(losses[0])])[0]
             self._train_info['loss_pos'] = np.array([jax.device_get(losses[1])])[0]
